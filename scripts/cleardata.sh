@@ -3,7 +3,13 @@ set -euo pipefail
 
 # Uses qr.db located next to this script
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DB_PATH="${SCRIPT_DIR}/qr.db"
+DB_PATH="${SCRIPT_DIR}/../qr.db"
+
+# Backward-compat fallback (older layouts placed qr.db under scripts/)
+if [ ! -f "$DB_PATH" ] && [ -f "${SCRIPT_DIR}/qr.db" ]; then
+  echo "[WARN] Using legacy DB path: ${SCRIPT_DIR}/qr.db"
+  DB_PATH="${SCRIPT_DIR}/qr.db"
+fi
 
 # Pre-checks
 command -v python3 >/dev/null 2>&1 || { echo "[ERROR] python3 not found."; exit 1; }
