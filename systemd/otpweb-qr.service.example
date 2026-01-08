@@ -1,0 +1,14 @@
+[Unit]
+Description=OTPWeb QR Service (Gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/otpweb
+EnvironmentFile=-/opt/otpweb/install.env
+ExecStart=/usr/bin/python3 -m gunicorn -b 0.0.0.0:5000 -w 2 qrsvc:app
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,37 @@
+# RPM package list for OTPWeb (Rocky/RHEL 9)
+#
+# Notes:
+# - This list is used by offline_packages.sh to download RPMs + dependencies.
+# - Install script (install.sh) will install a subset at runtime, but the offline bundle
+#   should include everything below to avoid missing dependencies in closed networks.
+#
+# Base runtime
+python3
+python3-pip
+openssl
+make
+curl
+bind-utils
+firewalld
+
+# RADIUS
+freeradius
+freeradius-utils
+
+# Google Authenticator PAM (may require EPEL on some distros)
+google-authenticator
+
+# AD Join / Winbind
+krb5-workstation
+authselect
+samba
+samba-winbind
+samba-winbind-clients
+
+# Optional: auto-create home directories on first login
+oddjob
+oddjob-mkhomedir
+
+# Build helper (needed to create offline repo metadata on the build machine)
+createrepo_c
+dnf-plugins-core
