@@ -53,7 +53,7 @@ vi install.env
 3) make excutable and Install:
 
 ```bash
-chmod +x install.sh
+chmod +x * scripts/*
 sudo bash install.sh
 ```
 
@@ -79,7 +79,7 @@ You will see a browser warning because the certificate is self-signed.
 From the project root:
 
 ```bash
-chmod +x offline_packages.sh
+chmod +x * scripts/*
 sudo bash offline_packages.sh
 ```
 
@@ -97,9 +97,28 @@ Copy the entire project directory **including `packages/`** to the offline serve
 ```bash
 cp install.env.example install.env
 vi install.env
-chmod +x install.sh
 sudo bash install.sh
 ```
+
+## How to use Web Console
+
+![Admin UI](assets/images/AdminPage.png)
+
+- **Admin UI**
+  - List accounts: List the account name where the OTP key value exists
+  - Add account: Generate OTP key value based on the input account name
+  - Rotate OTP Key: Change OTP Key value of the input account name
+  - Delete account : Delete OTP Key value of the input account name
+  - Create QR link : Create QR code link based on set TTL value (Administrator needs to forward QR code link to user)
+  - Export AD user list : List all user accounts that exist within the joined AD (A folder with a domain name is created within the project folder)
+  - Find accounts without OTP : Displays accounts listed through the "Export AD user list" that do not have OTP key value
+  - Generate OTP for all missing accounts : Generate OTP key values for accounts with no OTP key value found through "Find accounts without OTP"
+
+![QR Page UI 1](assets/images/QRPage1.png)
+![QR Page UI 2](assets/images/QRPage2.png)
+
+- **QR UI**
+  - Click the View QR button to display a QR code image
 
 ## Repository layout
 
