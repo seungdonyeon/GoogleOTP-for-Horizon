@@ -20,12 +20,12 @@ TTL_OPTIONS: List[Tuple[str, int]] = [
 # Click TTL:
 # - 0 means "expire immediately AFTER the QR is shown once"
 CLICK_TTL_OPTIONS: List[Tuple[str, int]] = [
-    ("Disabled (one-time view)", 0),
-    ("10 seconds", 10),
+    ("Ephemeral", 0),
     ("30 seconds", 30),
     ("1 minute", 60),
     ("5 minutes", 300),
     ("10 minutes", 600),
+    ("30 minutes", 1800),
 ]
 
 def ttl_label(ttl_sec: int) -> str:
