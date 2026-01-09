@@ -29,6 +29,18 @@ OTPWeb runs as two services:
 
 ---
 
+
+## Admin UI (offline-friendly)
+
+The Admin UI is intentionally **CDN-free** so it works in closed networks.
+
+- Static UI assets are served locally from `/static/`:
+  - `static/admin.css`
+  - `static/admin.js`
+
+If you want to re-skin the UI, edit those two files only (no build toolchain required).
+
+
 ## Requirements
 
 - Rocky Linux / RHEL 9.x
@@ -119,6 +131,24 @@ sudo bash install.sh
 
 - **QR UI**
   - Click the View QR button to display a QR code image
+
+
+## AD join issue
+
+Google-Authenticator usually uses sssd to join AD.
+
+- Example flow explanation (PAM → SSSD(AD) + google-authenticator):  
+  https://bioteam.net/blog/tech/networking/security/openvpn-active-directory-google-authenticator-remote-access-win/
+
+In certain builds of Windows Server 2025, using sssd causes an error when trying to join AD, so this project uses winbind.
+
+- SSSD issue tracker discussion (WS2025 domain join issue):  
+  https://github.com/SSSD/sssd/issues/7751
+- Microsoft Tech Community thread (WS2025 join failure message stream modified):  
+  https://techcommunity.microsoft.com/discussions/windowsserverinsiders/problems-to-join-debianubuntu-machines-to-a-domain/4158051
+- Rocky Linux forum (RL9.5 join WS2025 domain failures):  
+  https://forums.rockylinux.org/t/joining-rocky-linux-9-5-to-windows-server-2025-ad-failed-to-set-machine-obj-password/17112
+
 
 ## Manage
 
