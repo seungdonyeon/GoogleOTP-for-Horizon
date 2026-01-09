@@ -1,93 +1,124 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Google OTP Administrator</title>
-  <link rel="stylesheet" href="/static/tailwind.css">
-</head>
-<body class="bg-white text-gray-800 min-h-screen p-6">
-  <div class="flex justify-end mb-4 text-sm">
-    <a href="/change-password" class="text-gray-600 hover:text-black mr-4">🔑 Change Password</a>
-    <a href="/logout" class="text-gray-600 hover:text-black">🚪 Logout</a>
+{% extends "base.html" %}
+{% set title = "OTP Hub Admin • Dashboard" %}
+
+{% block content %}
+  <div class="layout">
+    <!-- Left: context + action catalog -->
+    <div class="panel">
+      <div class="hd">
+        <p class="h1">Dashboard</p>
+      </div>
+      <div class="bd">
+        <div class="card">
+          <div class="kv">
+            <div>Domain</div>
+            <div><code>{{ domain }}</code></div>
+            <div>QR TTL (created)</div>
+            <div><code>{{ current_ttl_label }}</code></div>
+            <div>QR TTL (after click)</div>
+            <div><code>{{ current_click_ttl_label }}</code></div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Actions</div>
+          <div class="btnrow">
+            <button form="mainForm" class="btn" name="action" value="add">➕ Add account</button>
+            <button form="mainForm" class="btn primary" name="action" value="qr_link">🧾 Create QR link</button>
+            <button form="mainForm" class="btn" name="action" value="change">🔄 Rotate OTP</button>
+            <button form="mainForm" class="btn danger" name="action" value="delete"
+                    data-confirm="Delete OTP for this account? This cannot be undone.">🗑️ Delete OTP</button>
+            <button form="mainForm" class="btn" name="action" value="list">📋 List accounts</button>
+          </div>
+<div class="help" style="margin-top:10px;">
+            Destructive actions will ask for confirmation. Most commands require an <b>account ID</b>.
+          </div>
+        </div>
+
+        <hr class="sep">
+
+        <div class="section">
+          <div class="section-title">Actions with AD</div>
+          <div class="btnrow" style="grid-template-columns:1fr;">
+            <button form="mainForm" class="btn" name="action" value="extract_users">🧾 Export AD user list</button>
+            <button form="mainForm" class="btn" name="action" value="check_missing_otp">🔍 Find accounts without OTP</button>
+            <button form="mainForm" class="btn" name="action" value="generate_missing_otp"
+                    data-confirm="Generate OTP for ALL accounts missing OTP? This may take time.">🛠️ Generate OTP for all missing</button>
+          </div>
+          <div class="help" style="margin-top:10px;">
+            Exported user list is stored under the project directory in a folder named after the domain.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: main form + results -->
+    <div class="panel">
+      <div class="hd">
+        <p class="h1">OTP account operations</p>
+      </div>
+      <div class="bd">
+        <form id="mainForm" method="post">
+          <div class="card">
+            <label for="uid">Account ID</label>
+            <input id="uid" type="text" name="uid" placeholder="e.g., test01,test02,test03" autocomplete="off">
+            <div class="help" style="margin-top:8px;">
+            </div>
+            <div class="help" style="margin-top:8px;">
+            </div>
+
+            <div class="section">
+              <div class="section-title">QR link TTL settings</div>
+
+              <div class="card" style="padding:12px; margin-bottom:10px;">
+                <div class="inline">
+                  <div class="pill">Created-at TTL</div>
+                  <div class="grow">
+                    <select name="ttl">
+                      {% for label, val in ttl_options %}
+                        <option value="{{ val }}" {% if val == current_ttl_val %}selected{% endif %}>{{ label }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <button class="btn small" type="submit" name="action" value="set_ttl">Apply</button>
+                </div>
+                <div class="help" style="margin-top:8px;">
+                  Link expires after this duration from creation time (regardless of click).
+                </div>
+              </div>
+
+              <div class="card" style="padding:12px;">
+                <div class="inline">
+                  <div class="pill">After-click TTL</div>
+                  <div class="grow">
+                    <select name="click_ttl">
+                      {% for label, val in click_ttl_options %}
+                        <option value="{{ val }}" {% if val == current_click_ttl_val %}selected{% endif %}>{{ label }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <button class="btn small" type="submit" name="action" value="set_click_ttl">Apply</button>
+                </div>
+                <div class="help" style="margin-top:8px;">
+                  Link becomes invalid this long after the <b>first successful view</b>.
+                </div>
+              </div>
+            </div>
+
+            
+          </div>
+        </form>
+
+        <div class="section">
+          <div class="section-title">
+            <span>Result</span>
+            <div class="inline">
+              <button id="btnCopyQR" class="btn small" type="button" style="display:none;">QR Copy</button>
+            </div>
+          </div>
+          <pre id="resultBox" class="output">{{ result }}</pre>
+        </div>
+      </div>
+    </div>
   </div>
-
-  <h2 class="text-2xl font-semibold mb-2">
-    Google OTP Administrator (User: <span class="text-black">{{ user }}</span>)
-  </h2>
-  <h4 class="mb-6 text-sm text-gray-600">
-    Current domain: <code class="bg-gray-100 px-2 py-1 rounded">{{ domain }}</code>
-  </h4>
-
-  <form method="post" class="mb-8 space-y-4">
-    <input type="text" name="uid" placeholder="Enter account ID"
-           class="w-full p-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-gray-400">
-
-    <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
-      <button name="action" value="list"
-              class="bg-gray-200 hover:bg-gray-300 text-black py-2 rounded">List accounts</button>
-
-      <button name="action" value="add"
-              class="bg-gray-200 hover:bg-gray-300 text-black py-2 rounded">Add account</button>
-
-      <button name="action" value="change"
-              class="bg-gray-200 hover:bg-gray-300 text-black py-2 rounded">Rotate OTP key</button>
-
-      <button name="action" value="delete"
-              class="bg-gray-200 hover:bg-gray-300 text-black py-2 rounded">Delete account</button>
-
-      <button name="action" value="qr_link"
-              class="bg-gray-200 hover:bg-gray-300 text-black py-2 rounded">Create QR link</button>
-
-      <div class="py-2 rounded"></div>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
-      <div class="bg-gray-200 hover:bg-gray-300 text-black py-2 rounded">
-        <div class="flex items-center justify-center gap-2">
-          <span class="text-sm whitespace-nowrap">QR link TTL (created-at)</span>
-          <select name="ttl"
-                  class="p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-gray-400">
-            {% for label, val in ttl_options %}
-            <option value="{{ val }}" {% if val == current_ttl_val %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-          <button type="submit" name="action" value="set_ttl"
-                  class="bg-gray-300 hover:bg-gray-400 text-black py-2 px-3 rounded">Apply</button>
-          <span class="text-sm whitespace-nowrap">Current: <b>{{ current_ttl_label }}</b></span>
-        </div>
-      </div>
-
-      <div class="bg-gray-200 hover:bg-gray-300 text-black py-2 rounded">
-        <div class="flex items-center justify-center gap-2">
-          <span class="text-sm whitespace-nowrap">QR link TTL (after click)</span>
-          <select name="click_ttl"
-                  class="p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-gray-400">
-            {% for label, val in click_ttl_options %}
-            <option value="{{ val }}" {% if val == current_click_ttl_val %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-          <button type="submit" name="action" value="set_click_ttl"
-                  class="bg-gray-300 hover:bg-gray-400 text-black py-2 px-3 rounded">Apply</button>
-          <span class="text-sm whitespace-nowrap">Current: <b>{{ current_click_ttl_label }}</b></span>
-        </div>
-      </div>
-
-      <div class="py-2 rounded"></div>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2">
-      <button name="action" value="extract_users"
-              class="bg-gray-300 hover:bg-gray-400 text-black py-2 rounded">🧾 Export AD user list</button>
-
-      <button name="action" value="check_missing_otp"
-              class="bg-gray-300 hover:bg-gray-400 text-black py-2 rounded">🔍 Find accounts without OTP</button>
-
-      <button name="action" value="generate_missing_otp"
-              class="bg-gray-300 hover:bg-gray-400 text-black py-2 rounded">🛠️ Generate OTP for all missing accounts</button>
-    </div>
-  </form>
-
-  <h3 class="text-lg font-semibold mb-2">📋 Result</h3>
-  <div class="bg-gray-100 border border-gray-300 p-4 rounded max-h-80 overflow-auto whitespace-pre-wrap text-sm">{{ result }}</div>
-</body>
-</html>
+{% endblock %}

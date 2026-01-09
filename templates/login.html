@@ -1,20 +1,26 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>OTP Admin Login</title>
-  <link rel="stylesheet" href="/static/tailwind.css">
-</head>
-<body class="bg-white text-gray-800 flex items-center justify-center min-h-screen">
-  <form method="post" class="bg-gray-100 p-8 rounded-lg shadow-md w-full max-w-md border border-gray-300">
-    <h2 class="text-2xl font-semibold text-center mb-6">🔐 Admin Login</h2>
-    <input type="text" name="username" placeholder="Username" required
-      class="w-full mb-4 p-3 rounded border border-gray-300 bg-white focus:outline-none focus:ring-2 focus:ring-gray-400">
-    <input type="password" name="password" placeholder="Password" required
-      class="w-full mb-6 p-3 rounded border border-gray-300 bg-white focus:outline-none focus:ring-2 focus:ring-gray-400">
-    <button type="submit"
-      class="w-full bg-gray-300 hover:bg-gray-400 text-black font-semibold py-2 rounded">Log In</button>
-  </form>
-</body>
-</html>
+{% extends "base.html" %}
+{% set title = "OTP Hub Admin • Sign in" %}
 
+{% block content %}
+  <div class="panel" style="max-width:520px;margin:40px auto 0 auto;">
+    <div class="hd">
+      <p class="h1" style="margin:0;">Sign in</p>
+    </div>
+    <div class="bd">
+      <form method="post" class="section" autocomplete="on">
+        {# app_impl.py expects both username and password fields.
+           We keep the UI minimal (password only) and send a fixed username.
+           If you changed ADMIN_USERNAME in env, adjust this value accordingly.
+        #}
+        <input type="hidden" name="username" value="admin">
+
+        <label for="password">Admin password</label>
+        <input id="password" type="password" name="password" placeholder="Enter admin password" autocomplete="current-password" required>
+
+        <div class="section" style="display:flex; justify-content:flex-end;">
+          <button class="btn primary" type="submit">Sign in</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

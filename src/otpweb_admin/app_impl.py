@@ -212,11 +212,40 @@ def index():
     current_click_ttl_val = qr_get_click_ttl_safe()
     current_click_ttl_label = click_ttl_label(current_click_ttl_val)
 
+    def _parse_uid_list(raw: str) -> list[str]:
+        """Parse a user input string into a list of account IDs.
+
+        Supports comma-separated lists like:
+          test01,test02,test03
+        Also tolerates whitespace/newlines and ignores empty entries.
+        """
+        if not raw:
+            return []
+        parts = []
+        # split by comma first, then split remaining by whitespace
+        for chunk in raw.replace('\n', ',').replace('\r', ',').split(','):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            for p in chunk.split():
+                p = p.strip()
+                if p:
+                    parts.append(p)
+        # de-dup while keeping order
+        seen = set()
+        out = []
+        for p in parts:
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+        return out
+
     if request.method == 'POST':
         action = request.form.get('action')
-        uid    = request.form.get('uid', '').strip()
+        uid_raw = request.form.get('uid', '').strip()
+        uids = _parse_uid_list(uid_raw)
 
-        if action in ['add', 'delete', 'change', 'qr_link'] and not uid:
+        if action in ['add', 'delete', 'change', 'qr_link'] and not uids:
             result = "The ID input is empty. Please enter a valid ID."
             return render_template('index.html', result=result, user=session['user'], domain=domain,
                                    ttl_options=TTL_OPTIONS, current_ttl_val=current_ttl_val, current_ttl_label=current_ttl_label,
@@ -324,38 +353,48 @@ def index():
                                    click_ttl_options=CLICK_TTL_OPTIONS, current_click_ttl_val=current_click_ttl_val, current_click_ttl_label=current_click_ttl_label)
 
         if action == 'qr_link':
-            try:
-                body = http_post_form(f"{QR_BASE}/token", {'user': uid}, timeout=1)
-                j = json.loads(body)
-                link = j.get('absolute_url') or j.get('url')
-                result = (
-                    f"[{uid}] Secret key generated.\n"
-                    f"One-time QR link: {link}\n"
-                    f"(Note: valid for {current_click_ttl_label} after clicking, depending on policy)"
-                )
-            except Exception as e:
-                result = f"[ERROR] Failed to create QR link: {e}"
+            lines = []
+            for uid in uids:
+                try:
+                    body = http_post_form(f"{QR_BASE}/token", {'user': uid}, timeout=1)
+                    j = json.loads(body)
+                    link = j.get('absolute_url') or j.get('url')
+                    lines.append(f"[{uid}] One-time QR link: {link}")
+                except Exception as e:
+                    lines.append(f"[{uid}] [ERROR] Failed to create QR link: {e}")
+            # Keep the note once at the end to avoid spam.
+            if lines:
+                lines.append(f"(Note: valid for {current_click_ttl_label} after first view, depending on policy)")
+            result = "\n".join(lines)
             return render_template('index.html', result=result, user=session['user'], domain=domain,
                                    ttl_options=TTL_OPTIONS, current_ttl_val=current_ttl_val, current_ttl_label=current_ttl_label,
                                    click_ttl_options=CLICK_TTL_OPTIONS, current_click_ttl_val=current_click_ttl_val, current_click_ttl_label=current_click_ttl_label)
 
-        cmd = [MERGE_SCRIPT]
+        # merge.sh actions
         if action == 'list':
-            cmd.append('-l')
-        elif action == 'add':
-            cmd += ['-a', uid]
-        elif action == 'delete':
-            cmd += ['-d', uid, '-f']
-        elif action == 'change':
-            cmd += ['-c', uid, '-f']
+            proc = subprocess.run([MERGE_SCRIPT, '-l'], capture_output=True, text=True)
+            result = proc.stdout + proc.stderr
+        elif action in ['add', 'delete', 'change']:
+            out_lines = []
+            for uid in uids:
+                if action == 'add':
+                    cmd = [MERGE_SCRIPT, '-a', uid]
+                elif action == 'delete':
+                    cmd = [MERGE_SCRIPT, '-d', uid, '-f']
+                else:  # change
+                    cmd = [MERGE_SCRIPT, '-c', uid, '-f']
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                chunk = (proc.stdout + proc.stderr).strip()
+                if chunk:
+                    out_lines.append(f"[{uid}]\n{chunk}")
+                else:
+                    out_lines.append(f"[{uid}] (no output)")
+            result = "\n\n".join(out_lines)
         else:
             result = "Unknown action."
             return render_template('index.html', result=result, user=session['user'], domain=domain,
                                    ttl_options=TTL_OPTIONS, current_ttl_val=current_ttl_val, current_ttl_label=current_ttl_label,
                                    click_ttl_options=CLICK_TTL_OPTIONS, current_click_ttl_val=current_click_ttl_val, current_click_ttl_label=current_click_ttl_label)
-
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        result = proc.stdout + proc.stderr
 
     return render_template('index.html', result=result, user=session['user'], domain=domain,
                            ttl_options=TTL_OPTIONS, current_ttl_val=current_ttl_val, current_ttl_label=current_ttl_label,
