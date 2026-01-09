@@ -1,8 +1,8 @@
-# Google OTP for Horizon
+# OTP Web
 
 Google Authenticator–based OTP account & QR link management web app, designed for **Horizon VDI 2FA** deployments on **Rocky Linux / RHEL**.
 
-OTPWeb is built for environments where **offline/closed networks are common**:
+OTP Web is built for environments where **offline/closed networks are common**:
 - Online: run `install.sh` and it installs what it needs
 - Offline: run `offline_packages.sh` **once on an internet-connected build machine** to generate `packages/`, then copy the whole project to the offline server and run `install.sh`
 
@@ -10,7 +10,7 @@ OTPWeb is built for environments where **offline/closed networks are common**:
 
 ## Architecture
 
-OTPWeb runs as two services:
+OTP Web runs as two services:
 
 - **Admin UI** (`app.py`)
   - Create/delete OTP accounts
@@ -28,17 +28,6 @@ OTPWeb runs as two services:
 - **Access**: HTTPS (self-signed certificate)
 
 ---
-
-
-## Admin UI (offline-friendly)
-
-The Admin UI is intentionally **CDN-free** so it works in closed networks.
-
-- Static UI assets are served locally from `/static/`:
-  - `static/admin.css`
-  - `static/admin.js`
-
-If you want to re-skin the UI, edit those two files only (no build toolchain required).
 
 
 ## Requirements
@@ -160,6 +149,10 @@ In certain builds of Windows Server 2025, using sssd causes an error when trying
   - Create qr.db.pak.YYYY-MM-DD_HHMMSS Backup before delete
   - Pre-print deletion targets
   - Optimizing DB with VACUUM at the end
+
+- clearaccount.sh
+  - List accounts that do not exist in AD but have home folders on the server
+  - Delete these home folders with admin's confirmation
 
 ## Requirements
 
