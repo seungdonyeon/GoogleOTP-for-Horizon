@@ -47,6 +47,8 @@ ADMIN_BIND="${ADMIN_BIND:-0.0.0.0}"
 QR_BIND="${QR_BIND:-0.0.0.0}"
 ENABLE_HTTPS="${ENABLE_HTTPS:-0}"
 ALLOW_SELF_SIGNED_TLS="${ALLOW_SELF_SIGNED_TLS:-0}"
+QR_ADMIN_KEY="${QR_ADMIN_KEY:-}"
+QR_ALLOWED_CIDRS="${QR_ALLOWED_CIDRS:-}"
 OTP_DISPLAY_NAME="${OTP_DISPLAY_NAME:-VDI}"
 # Back-compat (deprecated): if caller still sets OTP_ISSUER/OTP_LABEL_PREFIX, prefer OTP_DISPLAY_NAME
 OTP_ISSUER="${OTP_ISSUER:-$OTP_DISPLAY_NAME}"
@@ -54,6 +56,8 @@ OTP_LABEL_PREFIX="${OTP_LABEL_PREFIX:-$OTP_DISPLAY_NAME}"
 CERT_DIR="${CERT_DIR:-/etc/otpweb/certs}"
 CERT_FILE="${CERT_FILE:-$CERT_DIR/otpweb.crt}"
 KEY_FILE="${KEY_FILE:-$CERT_DIR/otpweb.key}"
+
+CERT_MODE="${CERT_MODE:-selfsigned}"
 
 AD_JOIN="${AD_JOIN:-0}"
 AD_REALM="${AD_REALM:-}"
@@ -72,6 +76,30 @@ HAS_MKHOMEDIR="${HAS_MKHOMEDIR:-0}"
 log()  { echo -e "[INFO] $*"; }
 warn() { echo -e "[WARN] $*"; }
 err()  { echo -e "[ERROR] $*" >&2; }
+
+ensure_qr_admin_key() {
+  # Generate QR_ADMIN_KEY if not present, and persist it into install.env.
+  local key="${QR_ADMIN_KEY:-}"
+  if [[ -n "$key" ]]; then
+    return 0
+  fi
+  log "QR_ADMIN_KEY is empty; generating a random admin key for QR service endpoints..."
+  # Prefer openssl; fall back to /dev/urandom.
+  if command -v openssl >/dev/null 2>&1; then
+    key="$(openssl rand -hex 32)"
+  else
+    key="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  fi
+  QR_ADMIN_KEY="$key"
+
+  # Persist into the env file so services and future runs use the same key.
+  if grep -q '^QR_ADMIN_KEY=' "$ENV_FILE"; then
+    sed -i "s/^QR_ADMIN_KEY=.*/QR_ADMIN_KEY=\"$key\"/" "$ENV_FILE"
+  else
+    printf '\nQR_ADMIN_KEY="%s"\n' "$key" >> "$ENV_FILE"
+  fi
+  log "Generated QR_ADMIN_KEY and saved to install.env."
+}
 
 need_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
@@ -140,6 +168,37 @@ remove_sssd_if_present() {
   fi
 }
 
+enable_epel_and_crb_best_effort() {
+  # Online-only helper:
+  # - EPEL provides google-authenticator packages on Rocky/RHEL 9 in many environments.
+  # - CRB is often required for EPEL dependencies (best-effort).
+  local offline="$1"
+  [[ "$offline" == "1" ]] && return 0
+
+  if ! rpm -q epel-release >/dev/null 2>&1; then
+    log "Installing epel-release (required for google-authenticator on Rocky/RHEL)..."
+    if ! dnf -y install epel-release; then
+      warn "Failed to install epel-release. google-authenticator may not be installable from enabled repos."
+      return 0
+    fi
+  fi
+
+  # Ensure config-manager exists (dnf-plugins-core), then best-effort enable CRB if present.
+  if ! dnf config-manager --help >/dev/null 2>&1; then
+    dnf -y install dnf-plugins-core >/dev/null 2>&1 || true
+  fi
+
+  if dnf config-manager --help >/dev/null 2>&1; then
+    if dnf repolist all 2>/dev/null | awk '{print $1}' | grep -qx 'crb'; then
+      log "Enabling CRB repo (best-effort)..."
+      dnf config-manager --set-enabled crb >/dev/null 2>&1 || warn "Could not enable CRB repo automatically."
+    fi
+  fi
+
+  dnf -y makecache >/dev/null 2>&1 || true
+}
+
+
 install_packages() {
   local offline="$1"
   [[ "$offline" == "1" ]] && setup_local_repo
@@ -158,7 +217,23 @@ install_packages() {
   dnf_install "$offline" openssl make
 
   dnf_install "$offline" freeradius freeradius-utils
-  dnf_install "$offline" google-authenticator || warn "Failed to install google-authenticator."
+
+  # google-authenticator (CLI + PAM module) is typically provided by EPEL on Rocky/RHEL 9.
+  # NOTE: 'google-authenticator-libpam' is a Debian/Ubuntu package name and does NOT exist on Rocky/RHEL.
+  # If we try to install a non-existent package alongside a real one, dnf fails the whole transaction.
+  enable_epel_and_crb_best_effort "$offline"
+
+  if dnf_install "$offline" google-authenticator; then
+    :
+  else
+    warn "Failed to install google-authenticator from current repositories."
+    warn "If you're on a restricted/offline network, make sure EPEL + CRB RPMs are present in your offline repo bundle."
+  fi
+
+  # Final sanity check: the UI requires /usr/bin/google-authenticator (or equivalent) to exist.
+  if ! command -v google-authenticator >/dev/null 2>&1; then
+    warn "google-authenticator command not found after installation attempt. OTP features that depend on it will not work."
+  fi
 
   remove_sssd_if_present
   dnf_install "$offline" samba samba-winbind samba-winbind-clients
@@ -169,7 +244,21 @@ install_packages() {
 configure_firewall() {
   log "Opening firewall ports..."
   firewall-cmd --permanent --add-port="${ADMIN_PORT}/tcp" >/dev/null 2>&1 || true
-  firewall-cmd --permanent --add-port="${QR_PORT}/tcp" >/dev/null 2>&1 || true
+
+  # QR service is usually exposed to end-users (to fetch /q/<token> images).
+  # Optionally restrict by source CIDR(s) via QR_ALLOWED_CIDRS.
+  if [[ -z "${QR_ALLOWED_CIDRS// }" ]]; then
+    firewall-cmd --permanent --add-port="${QR_PORT}/tcp" >/dev/null 2>&1 || true
+  else
+    # Remove any prior broad port-open rule (best-effort)
+    firewall-cmd --permanent --remove-port="${QR_PORT}/tcp" >/dev/null 2>&1 || true
+    IFS=',' read -r -a _cidrs <<< "$QR_ALLOWED_CIDRS"
+    for c in "${_cidrs[@]}"; do
+      c="$(echo "$c" | xargs)"
+      [[ -z "$c" ]] && continue
+      firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"$c\" port port=\"${QR_PORT}\" protocol=\"tcp\" accept" >/dev/null 2>&1 || true
+    done
+  fi
   firewall-cmd --permanent --add-port="1812/udp" >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port="1813/udp" >/dev/null 2>&1 || true
   firewall-cmd --reload >/dev/null 2>&1 || true
@@ -195,7 +284,8 @@ prompt_admin_password() {
 setup_admin_password_hash() {
   mkdir -p "$INSTALL_DIR/account"
   chmod 700 "$INSTALL_DIR/account" || true  # Store PBKDF2 (Werkzeug) hash in: $INSTALL_DIR/account/admin.pass
-  INSTALL_DIR="$INSTALL_DIR" ADMIN_PASSWORD="$ADMIN_PASSWORD" "$VENV_DIR/bin/python" - <<'PY'
+  ( umask 077
+    INSTALL_DIR="$INSTALL_DIR" ADMIN_PASSWORD="$ADMIN_PASSWORD" "$VENV_DIR/bin/python" - <<'PY'
 import os, sys
 from werkzeug.security import generate_password_hash
 
@@ -213,6 +303,7 @@ with open(out_path, "w", encoding="utf-8") as f:
     f.write(hashed)
 os.chmod(out_path, 0o600)
 PY
+  )
 }
 
 setup_python_env() {
@@ -242,6 +333,18 @@ ensure_self_signed_cert() {
   #   $KEY_FILE  (private key)
   if [[ "${ENABLE_HTTPS}" != "1" ]]; then
     return 0
+  fi
+
+  # Manual mode: require engineer-provided cert/key.
+  if [[ "${CERT_MODE}" == "manual" ]]; then
+    if [[ -f "${CERT_FILE}" && -f "${KEY_FILE}" ]]; then
+      chmod 600 "$KEY_FILE" || true
+      chmod 644 "$CERT_FILE" || true
+      return 0
+    fi
+    err "CERT_MODE=manual but certificate files not found: CERT_FILE=$CERT_FILE , KEY_FILE=$KEY_FILE"
+    err "Provide existing files (e.g., ./certs/otpweb.crt and ./certs/otpweb.key) and set CERT_DIR/CERT_FILE/KEY_FILE accordingly."
+    exit 1
   fi
 
   mkdir -p "$CERT_DIR"
@@ -735,6 +838,8 @@ sanity_checks() {
 main() {
   need_root
   sanity_checks
+
+  ensure_qr_admin_key
 
   local offline
   offline="$(detect_offline)"

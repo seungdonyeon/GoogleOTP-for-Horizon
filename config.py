@@ -90,6 +90,8 @@ QR_BIND    = env_str('QR_BIND', '0.0.0.0')
 ADMIN_PORT = env_int('ADMIN_PORT', 8000)
 QR_PORT    = env_int('QR_PORT', 5000)
 
+QR_ADMIN_KEY = env_str('QR_ADMIN_KEY', '').strip()  # Admin UI -> QR service auth key
+
 # ---- TLS ----
 CERT_FILE = env_str('OTPWEB_CERT_FILE', os.path.join(PROJECT_ROOT, 'cert', 'otpweb.crt'))
 KEY_FILE  = env_str('OTPWEB_KEY_FILE',  os.path.join(PROJECT_ROOT, 'cert', 'otpweb.key'))

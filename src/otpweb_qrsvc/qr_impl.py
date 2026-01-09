@@ -14,6 +14,26 @@ DEFAULT_CLICK_TTL_SEC = settings.DEFAULT_CLICK_TTL_SEC
 app = Flask(__name__)
 db_layer.init_db(DEFAULT_TTL_SEC, DEFAULT_CLICK_TTL_SEC)
 
+def require_admin():
+    """Protect admin-only endpoints.
+
+    The QR service is typically reachable by end-users (to fetch /q/<token> images).
+    However, endpoints that create tokens or mutate QR service state MUST be
+    restricted to the Admin UI.
+
+    Policy:
+      - If QR_ADMIN_KEY is set, requests must include the header:
+          X-OTPWEB-ADMIN-KEY: <QR_ADMIN_KEY>
+      - If QR_ADMIN_KEY is empty, allow the request (backward compatibility).
+        (Installer should generate/set QR_ADMIN_KEY for secure deployments.)
+    """
+    key = (getattr(cfg, "QR_ADMIN_KEY", "") or "").strip()
+    if not key:
+        return
+    got = (request.headers.get('X-OTPWEB-ADMIN-KEY') or "").strip()
+    if got != key:
+        abort(403, 'admin key required')
+
 def is_preview_bot(ua: str) -> bool:
     ua = (ua or "").lower()
     return any(x in ua for x in ("slackbot", "teams", "msteams", "facebookexternalhit", "discordbot", "telegrambot", "whatsapp", "preview", "linkpreview"))
@@ -40,6 +60,7 @@ def respond_expired():
 
 @app.post('/token')
 def create_token():
+    require_admin()
     # Accept both form and JSON (backward compatible)
     user = ""
     ttl_override = None
@@ -133,6 +154,7 @@ def q_open_post(token):
 
 @app.post('/mark-used')
 def mark_used():
+    require_admin()
     token = (request.form.get('token','') or '').strip()
     if not token:
         abort(400, 'token required')
@@ -141,10 +163,12 @@ def mark_used():
 
 @app.get('/get-ttl')
 def get_ttl():
+    require_admin()
     return jsonify({"ttl_sec": settings.get_ttl_sec()})
 
 @app.post('/set-ttl')
 def set_ttl():
+    require_admin()
     ttl_sec = request.form.get('ttl_sec')
     if request.is_json:
         data = request.get_json(silent=True) or {}
@@ -156,10 +180,12 @@ def set_ttl():
     return jsonify({"ok": True, "ttl_sec": val})
 @app.get('/get-click-ttl')
 def get_click_ttl():
+    require_admin()
     return jsonify({"click_ttl_sec": settings.get_click_ttl_sec()})
 
 @app.post('/set-click-ttl')
 def set_click_ttl():
+    require_admin()
     click_ttl_sec = request.form.get('click_ttl_sec')
     if request.is_json:
         data = request.get_json(silent=True) or {}
@@ -172,6 +198,7 @@ def set_click_ttl():
 
 @app.post('/purge')
 def purge():
+    require_admin()
     token_mod.purge()
     return jsonify({"ok": True})
 

@@ -1,9 +1,17 @@
-import ssl
-from flask import Flask, render_template, request, redirect, session
-import subprocess, time, hashlib, os, json, urllib.request, urllib.parse, secrets, urllib.error, ssl
-from urllib.parse import urlparse
+import hashlib
+import json
+import os
 import re
-from werkzeug.security import generate_password_hash, check_password_hash
+import secrets
+import ssl
+import subprocess
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from flask import Flask, redirect, render_template, request, session
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import config as cfg
 
@@ -97,6 +105,9 @@ def http_post_form(url: str, data: dict, timeout: int = 5) -> bytes:
     """POST form data. If URL is loopback HTTP but service is HTTPS, retry via HTTPS."""
     body = urllib.parse.urlencode(data).encode('utf-8')
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    # Protect admin-only QR service endpoints.
+    if getattr(cfg, 'QR_ADMIN_KEY', '').strip():
+        headers['X-OTPWEB-ADMIN-KEY'] = cfg.QR_ADMIN_KEY.strip()
     req = urllib.request.Request(url, data=body, headers=headers, method='POST')
     def _do(u: str) -> bytes:
         r = urllib.request.Request(u, data=body, headers=headers, method='POST')
@@ -114,7 +125,11 @@ def http_post_form(url: str, data: dict, timeout: int = 5) -> bytes:
 
 def http_get_json(url: str, timeout: int = 5) -> dict:
     ctx = _ssl_context_for_url(url)
-    with urllib.request.urlopen(url, timeout=timeout, context=ctx) as resp:
+    headers = {}
+    if getattr(cfg, 'QR_ADMIN_KEY', '').strip():
+        headers['X-OTPWEB-ADMIN-KEY'] = cfg.QR_ADMIN_KEY.strip()
+    req = urllib.request.Request(url, headers=headers, method='GET')
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         return json.loads(resp.read().decode('utf-8'))
 
 @app.before_request
@@ -127,9 +142,6 @@ def check_session_timeout():
 
 def _is_legacy_sha256_hash(s: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-f]{64}", (s or "").strip()))
-
-def _is_legacy_sha256_hash(s: str) -> bool:
-    return bool(re.fullmatch(r"[0-9a-f]{64}", (s or '').strip()))
 
 def _hash_password(plain: str) -> str:
     # PBKDF2 (salted + iterated). No extra dependency required.
