@@ -120,6 +120,22 @@ sudo bash install.sh
 - **QR UI**
   - Click the View QR button to display a QR code image
 
+## Manage
+
+- cleardata.sh
+  - Delete old historys from QR DB based on N days ago data
+  - Create qr.db.pak.YYYY-MM-DD_HHMMSS Backup before delete
+  - Pre-print deletion targets
+  - Optimizing DB with VACUUM at the end
+
+## Requirements
+
+- Rocky Linux / RHEL 9.x
+- systemd
+- Python 3
+- OpenSSL
+- EPEL (required for `google-authenticator` on Rocky/RHEL)
+
 ## Repository layout
 
 - `src/` — application modules
