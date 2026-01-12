@@ -1,0 +1,21 @@
+# /etc/systemd/system/otpweb-admin.service
+[Unit]
+Description=OTPWeb Admin UI (Flask/Gunicorn)
+After=network-online.target smb.service winbind.service
+Wants=network-online.target winbind.service
+
+[Service]
+Type=simple
+WorkingDirectory=/OTP-Hub
+EnvironmentFile=-/OTP-Hub/install.env
+# Ensure log dir exists even on clean systems
+ExecStartPre=/usr/bin/mkdir -p /var/log/otpweb
+ExecStartPre=/usr/bin/chmod 0755 /var/log/otpweb
+ExecStart=/opt/otpweb-venv/bin/python -m gunicorn -b 0.0.0.0:8000 -w 2 --certfile /etc/otpweb/certs/otpweb.crt --keyfile /etc/otpweb/certs/otpweb.key app:app
+Restart=always
+RestartSec=2
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

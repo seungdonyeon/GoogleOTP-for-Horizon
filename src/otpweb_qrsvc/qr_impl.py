@@ -2,6 +2,10 @@ from flask import Flask, request, abort, send_file, jsonify, make_response, redi
 import io, time
 import config as cfg
 
+from werkzeug.exceptions import HTTPException
+from otpweb_qrsvc.logging_setup import audit_logger, app_log
+from otpweb_common.request_context import get_or_set_req_id, get_client_ip
+
 from . import db_layer, settings, tokens as token_mod, otp as otp_mod, qr_image
 
 # Keep env-driven bind/port for compatibility (gunicorn supplies bind anyway)
@@ -12,6 +16,11 @@ DEFAULT_TTL_SEC = settings.DEFAULT_TTL_SEC
 DEFAULT_CLICK_TTL_SEC = settings.DEFAULT_CLICK_TTL_SEC
 
 app = Flask(__name__)
+
+
+@app.before_request
+def _set_request_context():
+    get_or_set_req_id()
 db_layer.init_db(DEFAULT_TTL_SEC, DEFAULT_CLICK_TTL_SEC)
 
 def require_admin():
@@ -27,12 +36,51 @@ def require_admin():
       - If QR_ADMIN_KEY is empty, allow the request (backward compatibility).
         (Installer should generate/set QR_ADMIN_KEY for secure deployments.)
     """
-    key = (getattr(cfg, "QR_ADMIN_KEY", "") or "").strip()
+    # Compatibility: some installs only set ADMIN_KEY.
+    key = (getattr(cfg, "QR_ADMIN_KEY", "") or getattr(cfg, "ADMIN_KEY", "") or "").strip()
     if not key:
         return
+    # Accept multiple ways of sending the admin key for compatibility:
+    #  - X-OTPWEB-ADMIN-KEY: <key>
+    #  - Authorization: Bearer <key>
+    #  - admin_key query param
+    #  - admin_key in JSON/form body
     got = (request.headers.get('X-OTPWEB-ADMIN-KEY') or "").strip()
+    if not got:
+        authz = (request.headers.get('Authorization') or '').strip()
+        if authz.lower().startswith('bearer '):
+            got = authz.split(None, 1)[1].strip()
+    if not got:
+        got = (request.args.get('admin_key') or '').strip()
+    if not got and request.is_json:
+        data = request.get_json(silent=True) or {}
+        got = (str(data.get('admin_key') or '')).strip()
+    if not got and request.form:
+        got = (request.form.get('admin_key') or '').strip()
+
     if got != key:
+        audit_logger.audit(
+            event='qr_admin_auth',
+            actor='admin',
+            result='fail',
+            reason='admin_key_required' if not got else 'invalid_admin_key',
+            ip=get_client_ip(),
+            req=get_or_set_req_id(),
+            path=request.path,
+            method=request.method,
+        )
         abort(403, 'admin key required')
+
+
+@app.errorhandler(HTTPException)
+def _handle_http_exception(e: HTTPException):
+    # Avoid "unhandled exception" stacks for expected 4xx responses.
+    # We still return a clear JSON payload for API callers.
+    return jsonify({
+        'ok': False,
+        'error': e.name,
+        'message': e.description,
+    }), e.code
 
 def is_preview_bot(ua: str) -> bool:
     ua = (ua or "").lower()
@@ -43,6 +91,32 @@ def no_cache(resp):
     resp.headers['Pragma'] = 'no-cache'
     resp.headers['Expires'] = '0'
     return resp
+
+
+def remaining_windows(row):
+    """Compute remaining seconds for creation TTL and click TTL.
+
+    Returns (ttl_remain, click_remain) where each is:
+      - None when the corresponding TTL is 'infinite' (configured 0 for creation, 0 for click-after-view semantics treated specially)
+      - 0 or positive int otherwise (clamped at 0)
+    """
+    now = int(time.time())
+    ttl = settings.get_ttl_sec()
+    click_ttl = settings.get_click_ttl_sec()
+
+    ttl_remain = None
+    if ttl > 0:
+        ttl_remain = max(0, int(ttl) - (now - int(row["created_at"])))
+
+    click_remain = None
+    ca = row["clicked_at"]
+    if ca is not None:
+        if click_ttl > 0:
+            click_remain = max(0, int(click_ttl) - (now - int(ca)))
+        elif click_ttl == 0:
+            # Special semantics: expire immediately AFTER QR shown once.
+            click_remain = 0
+    return ttl_remain, click_remain
 
 def respond_expired():
     html = """<!doctype html>
@@ -91,6 +165,18 @@ def create_token():
         abort(400, 'user required')
 
     resp = jsonify({"url": info["url"], "absolute_url": info["absolute_url"], "expires_in_sec": info["expires_in_sec"]})
+    # Human-friendly app log (qr.log). Do NOT log secrets or full URLs.
+    try:
+        app_log(
+            'INFO',
+            'token issued',
+            ip=get_client_ip(),
+            req=get_or_set_req_id(),
+            user=user,
+            ttl_sec=info.get('expires_in_sec'),
+        )
+    except Exception:
+        pass
     return no_cache(resp)
 
 @app.get('/q/<token>')
@@ -133,6 +219,21 @@ def q_open_post(token):
     # record click (and possibly mark used immediately if click_ttl==0)
     token_mod.record_click(token)
 
+    # Log a successful view (helps trace why/when a link was consumed).
+    try:
+        app_log(
+            'INFO',
+            'token viewed',
+            ip=get_client_ip(),
+            req=get_or_set_req_id(),
+            token=token,
+            click_ttl_sec=settings.get_click_ttl_sec(),
+            click_remain_sec=click_remain,
+            ttl_remain_sec=ttl_remain,
+        )
+    except Exception:
+        pass
+
     # Re-fetch row to observe used changes
     row = token_mod.get_row(token)
     if (not row) or row['used']==1 or token_mod.is_creation_expired(row) or token_mod.is_click_window_expired(row):
@@ -140,6 +241,28 @@ def q_open_post(token):
 
     user = row['user']
     secret = row['secret']
+    # Compute remaining windows for logging
+    ttl_remain, click_remain = (None, None)
+    try:
+        ttl_remain, click_remain = remaining_windows(row)
+    except Exception:
+        pass
+
+    # App log for operations visibility.
+    try:
+        app_log(
+            'INFO',
+            'qr viewed',
+            ip=get_client_ip(),
+            req=get_or_set_req_id(),
+            user=user,
+            ttl_sec=settings.get_ttl_sec(),
+            ttl_remain_sec=ttl_remain,
+            click_ttl_sec=settings.get_click_ttl_sec(),
+            click_remain_sec=click_remain,
+        )
+    except Exception:
+        pass
     otpauth = otp_mod.build_otpauth(user, secret)
     png = qr_image.png_bytes(otpauth)
     buf = io.BytesIO(png)
@@ -177,6 +300,10 @@ def set_ttl():
         abort(400, 'ttl_sec required')
     val = int(ttl_sec)
     settings.set_ttl_sec(val)
+    try:
+        app_log('INFO', 'ttl updated', ip=get_client_ip(), req=get_or_set_req_id(), ttl_sec=val)
+    except Exception:
+        pass
     return jsonify({"ok": True, "ttl_sec": val})
 @app.get('/get-click-ttl')
 def get_click_ttl():
@@ -194,6 +321,10 @@ def set_click_ttl():
         abort(400, 'click_ttl_sec required')
     val = int(click_ttl_sec)
     settings.set_click_ttl_sec(val)
+    try:
+        app_log('INFO', 'click_ttl updated', ip=get_client_ip(), req=get_or_set_req_id(), click_ttl_sec=val)
+    except Exception:
+        pass
     return jsonify({"ok": True, "click_ttl_sec": val})
 
 @app.post('/purge')

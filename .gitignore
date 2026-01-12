@@ -5,13 +5,15 @@ certs/
 *.db
 *.log
 
-# Offline bundle artifacts
+# Offline bundles / build artifacts (NOT for GitHub)
 packages/
-
-# Secrets / env
-install.env
-.env
-*.env.local
+packages/**/*
+*.rpm
+*.whl
+repodata/
+otpweb-local.repo
+*.tar.gz
+*.zip
 
 # Python
 __pycache__/

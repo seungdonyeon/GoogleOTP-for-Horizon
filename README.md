@@ -168,3 +168,50 @@ In certain builds of Windows Server 2025, using sssd causes an error when trying
 - `templates/`, `static/` — UI assets
 - `scripts/` — helper scripts (wrappers are kept at repo root for convenience)
 - `systemd/` — example unit files
+## Logging (audit.log / qr.log)
+
+OTPWeb writes **two** log streams:
+
+### 1) Audit log (JSON Lines)
+- Path: `/var/log/otpweb/audit.log`
+- Format: **one JSON object per line** (JSONL)
+- Purpose: **operator actions + security-relevant events** (who did what, from where, and whether it succeeded)
+
+Common fields:
+- `ts`: ISO timestamp with timezone
+- `app`: `"otpweb"`
+- `component`: `"admin"` or `"qr"`
+- `event`: action name (examples below)
+- `actor`: usually `"admin"` for Admin UI actions
+- `targets`: list of affected identifiers (e.g., usernames)
+- `result`: `"ok"` or `"fail"`
+- `ip`: client IP (Admin UI forwards the original client IP to the QR service)
+- `req`: request correlation id (helps tie together admin + qr actions)
+
+Admin UI events (examples):
+- `login`
+- `account_create` / `account_delete` / `account_list`
+- `qr_link_create`
+- `ad_user_export`
+- `ad_user_missing_otp_check`
+
+QR service security events:
+- `qr_admin_auth` is **logged only on failure** (missing/invalid admin key). Successful auth is intentionally not recorded to reduce noise.
+
+### 2) QR service operational log (text)
+- Path: `/var/log/otpweb/qr.log`
+- Format: text lines with key/value pairs
+- Purpose: operational visibility for QR link usage (token issuance, views)
+
+Examples:
+- `token issued` (includes `user`, `ttl_sec`)
+- `token viewed` / `qr viewed` (includes `user` and remaining TTL when available)
+
+> Tip: use `req=` to correlate an Admin UI request with the QR service request when troubleshooting.
+
+## Repository layout notes (for GitHub)
+
+- `install.sh` is the main installer (online/offline).
+- Offline bundles are stored under `packages/` and **must not be committed**. Use `offline_packages.sh` on a build server to create/update the offline bundle.
+- `packaging/systemd/` contains **template** unit files for reference. The installer writes unit files to `/etc/systemd/system/`.
+- If an older `systemd/` directory exists from previous iterations, remove it before pushing to GitHub to avoid confusion (only `packaging/systemd/` should remain).

@@ -15,6 +15,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import config as cfg
 
+from otpweb_admin.logging_setup import audit_logger, app_log
+from otpweb_common.request_context import (
+    CLIENT_IP_HEADER,
+    REQ_ID_HEADER,
+    get_client_ip,
+    get_or_set_req_id,
+)
+
 from . import qr_client, auth as auth_mod, domain as domain_mod, ttl as ttl_mod
 PROJECT_ROOT = cfg.PROJECT_ROOT
 
@@ -47,6 +55,13 @@ def load_flask_secret():
         return f.read().strip()
 
 app.secret_key = load_flask_secret()  # file-backed (persists across reboots)
+
+
+@app.before_request
+def _set_request_context():
+    # Ensures every request has a stable request id. Also makes get_client_ip()
+    # prefer forwarded headers when present.
+    get_or_set_req_id()
 
 SESSION_TIMEOUT = 1800
 
@@ -104,10 +119,18 @@ CLICK_TTL_OPTIONS = ttl_mod.CLICK_TTL_OPTIONS
 def http_post_form(url: str, data: dict, timeout: int = 5) -> bytes:
     """POST form data. If URL is loopback HTTP but service is HTTPS, retry via HTTPS."""
     body = urllib.parse.urlencode(data).encode('utf-8')
-    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        # Propagate original client context to the QR service so logs show the
+        # admin operator's IP (not just 127.0.0.1).
+        REQ_ID_HEADER: get_or_set_req_id(),
+        CLIENT_IP_HEADER: get_client_ip(),
+    }
     # Protect admin-only QR service endpoints.
-    if getattr(cfg, 'QR_ADMIN_KEY', '').strip():
-        headers['X-OTPWEB-ADMIN-KEY'] = cfg.QR_ADMIN_KEY.strip()
+    # Compatibility: some installs only set ADMIN_KEY. Use it as a fallback.
+    _adm_key = (getattr(cfg, 'QR_ADMIN_KEY', '') or getattr(cfg, 'ADMIN_KEY', '')).strip()
+    if _adm_key:
+        headers['X-OTPWEB-ADMIN-KEY'] = _adm_key
     req = urllib.request.Request(url, data=body, headers=headers, method='POST')
     def _do(u: str) -> bytes:
         r = urllib.request.Request(u, data=body, headers=headers, method='POST')
@@ -125,9 +148,13 @@ def http_post_form(url: str, data: dict, timeout: int = 5) -> bytes:
 
 def http_get_json(url: str, timeout: int = 5) -> dict:
     ctx = _ssl_context_for_url(url)
-    headers = {}
-    if getattr(cfg, 'QR_ADMIN_KEY', '').strip():
-        headers['X-OTPWEB-ADMIN-KEY'] = cfg.QR_ADMIN_KEY.strip()
+    headers = {
+        REQ_ID_HEADER: get_or_set_req_id(),
+        CLIENT_IP_HEADER: get_client_ip(),
+    }
+    _adm_key = (getattr(cfg, 'QR_ADMIN_KEY', '') or getattr(cfg, 'ADMIN_KEY', '')).strip()
+    if _adm_key:
+        headers['X-OTPWEB-ADMIN-KEY'] = _adm_key
     req = urllib.request.Request(url, headers=headers, method='GET')
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         return json.loads(resp.read().decode('utf-8'))
@@ -187,14 +214,30 @@ def click_ttl_label(sec: int) -> str:
     return ttl_mod.click_ttl_label(int(sec))
 
 def qr_get_ttl_safe() -> int:
+    # Avoid hammering QR service on every page load; keep a short cache.
     try:
-        return int(qr_client.qr_get_ttl())
+        if _QR_TTL_CACHE.get('val') is not None and (time.time() - float(_QR_TTL_CACHE.get('ts', 0.0))) < 10:
+            return int(_QR_TTL_CACHE['val'])
+    except Exception:
+        pass
+    try:
+        v = int(qr_client.qr_get_ttl(req_id=get_or_set_req_id(), client_ip=get_client_ip()))
+        _QR_TTL_CACHE.update({'val': v, 'ts': time.time()})
+        return v
     except Exception:
         return 3600
 
 def qr_get_click_ttl_safe() -> int:
+    # Avoid hammering QR service on every page load; keep a short cache.
     try:
-        return int(qr_client.qr_get_click_ttl())
+        if _QR_CLICK_TTL_CACHE.get('val') is not None and (time.time() - float(_QR_CLICK_TTL_CACHE.get('ts', 0.0))) < 10:
+            return int(_QR_CLICK_TTL_CACHE['val'])
+    except Exception:
+        pass
+    try:
+        v = int(qr_client.qr_get_click_ttl(req_id=get_or_set_req_id(), client_ip=get_client_ip()))
+        _QR_CLICK_TTL_CACHE.update({'val': v, 'ts': time.time()})
+        return v
     except Exception:
         return 0
 
@@ -247,9 +290,55 @@ def index():
 
         if action in ['add', 'delete', 'change', 'qr_link'] and not uids:
             result = "The ID input is empty. Please enter a valid ID."
+            try:
+                audit_logger.audit(
+                    event='admin_action_invalid_input',
+                    actor=session.get('user') or 'unknown',
+                    result='fail',
+                    reason='empty_id',
+                    ip=get_client_ip(),
+                    req=get_or_set_req_id(),
+                )
+            except Exception:
+                pass
             return render_template('index.html', result=result, user=session['user'], domain=domain,
                                    ttl_options=TTL_OPTIONS, current_ttl_val=current_ttl_val, current_ttl_label=current_ttl_label,
                                    click_ttl_options=CLICK_TTL_OPTIONS, current_click_ttl_val=current_click_ttl_val, current_click_ttl_label=current_click_ttl_label)
+
+        # Audit the operator action at the Admin UI layer.
+        # (QR service audits are for internal Admin->QR auth and token lifecycle.)
+        try:
+            actor = session.get('user') or 'unknown'
+            cip = get_client_ip()
+            rid = get_or_set_req_id()
+            _event_map = {
+                'list': 'account_list',
+                'add': 'account_create',
+                'delete': 'account_delete',
+                'change': 'account_rotate',
+                'qr_link': 'qr_link_create',
+                'set_ttl': 'qr_ttl_update',
+                'set_click_ttl': 'qr_click_ttl_update',
+                'extract_users': 'ad_user_export',
+                'check_missing_otp': 'ad_user_missing_otp_check',
+            }
+            ev = _event_map.get(action or '', f'admin_action_{action or "unknown"}')
+            extra = {}
+            if action == 'set_ttl':
+                extra['ttl_sec'] = request.form.get('ttl', '')
+            if action == 'set_click_ttl':
+                extra['click_ttl_sec'] = request.form.get('click_ttl', '')
+            audit_logger.audit(
+                event=ev,
+                actor=actor,
+                result='ok',
+                ip=cip,
+                req=rid,
+                targets=uids,
+                **extra,
+            )
+        except Exception:
+            pass
 
         if action == 'extract_users':
             if domain in ["No domain", "Failed to read domain"]:
@@ -414,8 +503,23 @@ def login():
                     f.write(new_hash)
                 ADMIN_PASSWORD_HASH = new_hash
             session['user'] = user
+            audit_logger.audit(
+                event='login',
+                actor=user,
+                result='ok',
+                ip=get_client_ip(),
+                req=get_or_set_req_id(),
+            )
             return redirect('/')
         else:
+            audit_logger.audit(
+                event='login',
+                actor=user or 'unknown',
+                result='fail',
+                reason='bad_credentials',
+                ip=get_client_ip(),
+                req=get_or_set_req_id(),
+            )
             return "Login Failed", 401
     return render_template('login.html')
 

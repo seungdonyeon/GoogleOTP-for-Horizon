@@ -1,4 +1,6 @@
 import os
+import secrets
+from pathlib import Path
 from urllib.parse import urlparse
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -91,6 +93,52 @@ ADMIN_PORT = env_int('ADMIN_PORT', 8000)
 QR_PORT    = env_int('QR_PORT', 5000)
 
 QR_ADMIN_KEY = env_str('QR_ADMIN_KEY', '').strip()  # Admin UI -> QR service auth key
+
+
+def _load_or_create_secret(path: str, *, length_bytes: int = 32) -> str:
+    """Load a shared secret from disk, or create it once (atomically).
+
+    This is used for QR_ADMIN_KEY so both services share the same key even when
+    the operator does not set the environment variable.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    if p.exists():
+        return p.read_text(encoding='utf-8').strip()
+
+    # Atomic create: either we create, or another process beats us and we read.
+    secret = secrets.token_hex(length_bytes)
+    try:
+        fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(secret + "\n")
+        return secret
+    except FileExistsError:
+        return p.read_text(encoding='utf-8').strip()
+
+
+# If QR_ADMIN_KEY is not provided, persist a shared default.
+_QR_ADMIN_KEY_PATH = '/etc/otpweb/qr_admin.key'
+
+
+def get_qr_admin_key() -> str:
+    """Return the shared Admin UI -> QR service auth key.
+
+    Why a function (not just a module constant)?
+    - Allows runtime reload if the operator regenerates /etc/otpweb/qr_admin.key
+      but only restarts one of the two services.
+    - Keeps behavior deterministic: env QR_ADMIN_KEY overrides disk.
+    """
+    env_val = env_str('QR_ADMIN_KEY', '').strip()
+    if env_val:
+        return env_val
+    # Disk-backed shared default
+    return _load_or_create_secret(_QR_ADMIN_KEY_PATH, length_bytes=32).strip()
+
+
+if not QR_ADMIN_KEY:
+    QR_ADMIN_KEY = get_qr_admin_key()
 
 # ---- TLS ----
 CERT_FILE = env_str('OTPWEB_CERT_FILE', os.path.join(PROJECT_ROOT, 'cert', 'otpweb.crt'))
