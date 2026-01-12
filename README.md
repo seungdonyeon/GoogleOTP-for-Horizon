@@ -214,4 +214,3 @@ Examples:
 - `install.sh` is the main installer (online/offline).
 - Offline bundles are stored under `packages/` and **must not be committed**. Use `offline_packages.sh` on a build server to create/update the offline bundle.
 - `packaging/systemd/` contains **template** unit files for reference. The installer writes unit files to `/etc/systemd/system/`.
-- If an older `systemd/` directory exists from previous iterations, remove it before pushing to GitHub to avoid confusion (only `packaging/systemd/` should remain).
