@@ -208,9 +208,3 @@ Examples:
 - `token viewed` / `qr viewed` (includes `user` and remaining TTL when available)
 
 > Tip: use `req=` to correlate an Admin UI request with the QR service request when troubleshooting.
-
-## Repository layout notes (for GitHub)
-
-- `install.sh` is the main installer (online/offline).
-- Offline bundles are stored under `packages/` and **must not be committed**. Use `offline_packages.sh` on a build server to create/update the offline bundle.
-- `packaging/systemd/` contains **template** unit files for reference. The installer writes unit files to `/etc/systemd/system/`.
